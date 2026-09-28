@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+frontend/dist/
+data/
+.env
+*.log
+
+# Local agent configuration and private environment files
+.agents/
+.codex/
+.env.*
+!.env.example
+# Library backups and audio must stay local
+*.sqlite
+*.sqlite3
+*.db
+*.mp3
+*.m4a
+*.opus
+*.flac
+*.ogg
+*.wav

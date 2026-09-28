@@ -1,0 +1,9 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.20
+httpx>=0.28,<1
+yt-dlp[default]>=2025.3.31
+ytmusicapi>=1.10,<2
+mutagen>=1.47,<2
+Pillow>=11,<13
+pytest>=8,<10
