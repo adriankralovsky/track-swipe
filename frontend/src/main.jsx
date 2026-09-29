@@ -119,7 +119,9 @@ function App() {
     [settings, setSettings] = useState(null),
     [revision, setRevision] = useState(0),
     [toast, setToast] = useState(null),
-    [importOpen, setImportOpen] = useState(false),
+    [importOpen, setImportOpen] = useState(() =>
+      new URLSearchParams(window.location.search).has("spotify"),
+    ),
     [busy, setBusy] = useState(false),
     [search, setSearch] = useState("");
   const notify = useCallback(
@@ -127,6 +129,19 @@ function App() {
     [],
   );
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (query.has("spotify")) {
+      notify(
+        query.get("spotify") === "connected"
+          ? "Spotify connected. Paste a playlist link to import."
+          : query.get("message") || "Spotify connection failed",
+        query.get("spotify") !== "connected",
+      );
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [notify]);
+
   useEffect(() => {
     api("/settings")
       .then(setSettings)
@@ -427,6 +442,13 @@ function App() {
           subtitle="Your playlists are the starting point. Your taste does the rest."
           close={() => !busy && setImportOpen(false)}
         >
+          <SpotifyImport
+            busy={busy}
+            setBusy={setBusy}
+            perform={perform}
+            done={() => setImportOpen(false)}
+            notify={notify}
+          />
           <label className="dropzone">
             <span className="upload-icon">
               {busy ? <LoaderCircle className="spin" /> : <Upload />}
@@ -487,6 +509,179 @@ function App() {
         </Modal>
       )}
     </div>
+  );
+}
+
+function SpotifyImport({ busy, setBusy, perform, done, notify }) {
+  const [connection, setConnection] = useState(null);
+  const [clientId, setClientId] = useState("");
+  const [redirect, setRedirect] = useState(
+    "http://127.0.0.1:8765/api/spotify/callback",
+  );
+  const [url, setUrl] = useState(
+    () => sessionStorage.getItem("trackswipe-playlist-url") || "",
+  );
+  const [setup, setSetup] = useState(false);
+  const [error, setError] = useState("");
+  const load = () =>
+    api("/spotify/status")
+      .then((value) => {
+        setConnection(value);
+        setClientId(value.client_id);
+        setRedirect(value.redirect_uri);
+      })
+      .catch((e) => setError(e.message));
+  useEffect(() => {
+    load();
+  }, []);
+  return (
+    <section className="spotify-import">
+      <div className="spotify-import-heading">
+        <div>
+          <span className="eyebrow">STRAIGHT FROM SPOTIFY</span>
+          <h3>One playlist. One link.</h3>
+        </div>
+        {connection?.connected && <span className="pill">Connected ✓</span>}
+      </div>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError("");
+          const result = await perform(() => post("/import-url", { url }));
+          setBusy(false);
+          if (result) {
+            sessionStorage.removeItem("trackswipe-playlist-url");
+            notify(
+              `${result.playlist}: ${result.imported} added · ${result.merged} merged · ${result.scan.matched} already in library${result.omitted ? ` · ${result.omitted} unavailable/local items or podcasts omitted` : ""}`,
+            );
+            done();
+          }
+        }}
+      >
+        <label htmlFor="spotify-playlist-url">Spotify playlist URL</label>
+        <div className="spotify-url-row">
+          <input
+            id="spotify-playlist-url"
+            value={url}
+            disabled={busy}
+            placeholder="https://open.spotify.com/playlist/…"
+            onChange={(e) => {
+              setUrl(e.target.value);
+              sessionStorage.setItem("trackswipe-playlist-url", e.target.value);
+            }}
+          />
+          <button
+            className="primary"
+            disabled={busy || !connection?.connected || !url.trim()}
+            type="submit"
+          >
+            {busy ? (
+              <LoaderCircle size={16} className="spin" />
+            ) : (
+              <ArrowUpRight size={16} />
+            )}{" "}
+            Import playlist
+          </button>
+        </div>
+      </form>
+      <p className="hint">
+        Imports all available songs with Spotify metadata and the original
+        playlist name. Re-import to add new songs while keeping your decisions.
+      </p>
+      <button
+        className="secondary"
+        disabled={busy || !connection}
+        onClick={() => setSetup(!setup)}
+      >
+        {connection?.connected
+          ? "Connection settings"
+          : "Connect Spotify to import links"}
+      </button>
+      {setup && (
+        <div className="spotify-setup">
+          <p>
+            Create an app in the{" "}
+            <a
+              href="https://developer.spotify.com/dashboard"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Spotify developer dashboard
+            </a>
+            , enable Web API, and register the redirect address below. Paste its
+            Client ID here; no client secret is needed.
+          </p>
+          <p>
+            Spotify currently requires Premium for development app owners and
+            limits access to playlists you own or collaborate on. CSV imports
+            work without this connection.
+          </p>
+          <label htmlFor="spotify-client-id">Spotify Client ID</label>
+          <input
+            id="spotify-client-id"
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            disabled={busy}
+            autoComplete="off"
+            placeholder="Client ID from your developer app"
+          />
+          <label htmlFor="spotify-redirect">
+            Redirect URI (must match your Spotify app)
+          </label>
+          <input
+            id="spotify-redirect"
+            value={redirect}
+            onChange={(e) => setRedirect(e.target.value)}
+            disabled={busy}
+          />
+          <div className="spotify-url-row">
+            <button
+              className="primary"
+              disabled={busy || !clientId.trim()}
+              onClick={async () => {
+                setBusy(true);
+                const result = await perform(() =>
+                  post("/spotify/connect", {
+                    client_id: clientId,
+                    redirect_uri: redirect,
+                  }),
+                );
+                if (result) window.location.assign(result.url);
+                else setBusy(false);
+              }}
+            >
+              Continue to Spotify <ArrowUpRight size={16} />
+            </button>
+            {connection?.connected && (
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  await perform(
+                    () => post("/spotify/disconnect", {}),
+                    "Spotify disconnected",
+                  );
+                  await load();
+                  setBusy(false);
+                }}
+              >
+                Disconnect
+              </button>
+            )}
+          </div>
+          <small>
+            Connection tokens stay on this server and are excluded from library
+            backups. Disconnect removes them locally.
+          </small>
+        </div>
+      )}
+      {error && <p role="alert">{error}</p>}
+      <div className="import-divider">
+        <span>or import a file</span>
+      </div>
+    </section>
   );
 }
 

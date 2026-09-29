@@ -26,3 +26,5 @@ data/
 *cookies*.txt
 *Cookies*.txt
 private/
+spotify-connection.json
+.spotify-*

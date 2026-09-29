@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from . import db, importer, matcher, media, metadata, autoapprove, youtube, retries
+from . import db, importer, matcher, media, metadata, autoapprove, youtube, retries, spotify
 from . import playlists as playlist_export
 
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
@@ -108,11 +108,49 @@ def import_data(data,name):
     rows=importer.parse(data,name)
     if not rows: raise ValueError('No Spotify tracks found. Use Exportify CSV, Spotify track links, or an account export with playlist/library records.')
     for m,_ in rows[:25]: importer.enrich(m)
+    return import_rows(rows)
+
+def import_rows(rows):
     with operation:
         added=importer.merge(rows)
         scan=media.scan()
         playlist_export.sync_safely()
     return dict(imported=added,merged=len(rows)-added,scan=scan,unresolved=sum(not m['title'] or not m['artists'] for m,_ in rows))
+
+@app.get('/api/spotify/status')
+def spotify_status():
+    return spotify.status()
+
+@app.post('/api/spotify/connect')
+def spotify_connect(body:dict):
+    from fastapi.responses import JSONResponse
+    url=spotify.authorize(str(body.get('client_id','')).strip(), str(body.get('redirect_uri',spotify.DEFAULT_REDIRECT)).strip())
+    response=JSONResponse({'url':url},headers={'Cache-Control':'no-store'})
+    # The callback may use 127.0.0.1 while the UI uses localhost. The verifier
+    # remains server-side; the unguessable, single-use state binds the request.
+    return response
+
+@app.post('/api/spotify/disconnect')
+def spotify_disconnect():
+    spotify.disconnect()
+    return {'ok':True}
+
+@app.get('/api/spotify/callback')
+def spotify_callback(state:str='', code:str='', error:str=''):
+    from fastapi.responses import RedirectResponse
+    from urllib.parse import urlencode
+    try:
+        spotify.callback(state,code,error)
+        query={'spotify':'connected'}
+    except ValueError as exc:
+        query={'spotify':'error','message':str(exc)}
+    return RedirectResponse('/?'+urlencode(query),status_code=303,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+
+@app.post('/api/import-url')
+def import_url(body:dict):
+    rows, details=spotify.fetch_playlist(body.get('url',''))
+    if not rows: raise ValueError('No importable Spotify songs in this playlist. Local files, unavailable tracks and podcasts cannot be imported by URL.')
+    return import_rows(rows) | details
 
 @app.get('/api/import-files')
 def import_files():

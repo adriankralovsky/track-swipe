@@ -27,3 +27,9 @@ Backups use SQLite's online backup API. Restore validates schema/integrity befor
 ## Download retry migration (version 2)
 
 `download_retries` stores the per-track retry count, next eligible attempt timestamp, and error category. Existing version 1 databases migrate additively; backup restore still accepts version 1. The `retrying` track state stays visible in Queue. `retries.py` claims due jobs transactionally, honors pause, and applies a provider-wide cooldown on rate-limit failures. Temporary errors get three additional attempts (30/120/300 seconds); permanent/authentication errors and exhausted retries stay failed. Manual retry resets the budget; successful downloads clear it. Retry state is included in SQLite and JSON exports.
+
+## Spotify URL imports and playlist display names
+
+`spotify.py` owns optional official Spotify API access. Authorization uses PKCE, read-only playlist scopes, expiring single-use state, and an atomic owner-only token file outside the exported database. The browser receives connection status and the public Client ID, never access or refresh tokens. Tokens refresh on expiry or one unauthorized response. API URLs are constructed locally so pagination cannot forward credentials to another host.
+
+URL imports fetch all item pages and compare playlist snapshots before merging anything. A failed or changing playlist leaves the library untouched. File and URL imports share the same merge/scan/export pipeline. Filename-derived playlist names replace underscores with spaces; explicit CSV/JSON/API names are preserved. Managed M3U headers contain playlist IDs so renaming a database playlist preserves its export path and avoids duplicate server imports. Existing server display names are independent of those files.

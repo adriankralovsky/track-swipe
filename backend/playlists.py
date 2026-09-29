@@ -10,6 +10,7 @@ from .media import safe
 
 _lock = threading.Lock()
 MARKER = '#TRACKSWIPE:managed-v1'
+ID_MARKER = '#TRACKSWIPE-ID:'
 
 
 def line(value):
@@ -32,14 +33,27 @@ def sync(force=False):
         root, target = directory(settings)
         target.mkdir(parents=True, exist_ok=True)
         result = {'written': 0, 'unchanged': 0, 'tracks': 0, 'omitted': 0, 'directory': str(target)}
+        existing = {}
+        for path in target.glob('*.m3u'):
+            if path.is_symlink(): continue
+            headers = path.read_text(encoding='utf-8', errors='replace').splitlines()
+            if MARKER not in headers: continue
+            for header in headers:
+                if header.startswith(ID_MARKER):
+                    key = header[len(ID_MARKER):]
+                    if key in existing: raise ValueError('Duplicate managed playlist ID: ' + key)
+                    existing[key] = path
         with db.connect() as c:
             entries=c.execute('SELECT * FROM playlists ORDER BY id').fetchall()
             names=[safe(p['name']).casefold() for p in entries]
             for playlist in entries:
                 name=safe(playlist['name'])
                 if names.count(name.casefold())>1: name+=f" [ts-{playlist['id']}]"
-                dest=target/(name+'.m3u')
-                lines = ['#EXTM3U', MARKER, '#PLAYLIST:' + line(playlist['name'])]
+                dest=existing.get(str(playlist['id']), target/(name+'.m3u'))
+                if dest in existing.values() and existing.get(str(playlist['id'])) != dest:
+                    dest=target/(name+f" [ts-{playlist['id']}].m3u")
+                if dest.is_symlink(): raise ValueError('Refusing to replace a playlist symlink')
+                lines = ['#EXTM3U', MARKER, ID_MARKER + str(playlist['id']), '#PLAYLIST:' + line(playlist['name'])]
                 seen = set()
                 rows = c.execute('SELECT t.* FROM tracks t JOIN track_playlists tp ON tp.track_id=t.id WHERE tp.playlist_id=? ORDER BY tp.rowid', (playlist['id'],)).fetchall()
                 for row in rows:
@@ -63,6 +77,9 @@ def sync(force=False):
                     previous = dest.read_text(encoding='utf-8')
                     if MARKER not in previous.splitlines():
                         raise ValueError(f'Refusing to replace an unmanaged playlist: {dest.name}')
+                    identifiers=[h[len(ID_MARKER):] for h in previous.splitlines() if h.startswith(ID_MARKER)]
+                    if identifiers and identifiers != [str(playlist['id'])]:
+                        raise ValueError('Refusing to replace a different managed playlist: ' + dest.name)
                     if previous == content:
                         result['unchanged'] += 1
                         continue

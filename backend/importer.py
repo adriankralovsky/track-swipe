@@ -42,7 +42,7 @@ def parse(data, name):
                     results.extend(parse(z.read(i),i.filename))
         return results
     text=data.decode('utf-8-sig')
-    source=name.rsplit('/',1)[-1].rsplit('.',1)[0]
+    source=name.rsplit('/',1)[-1].rsplit('.',1)[0].replace('_',' ')
     if name.lower().endswith('.json'):
         obj=json.loads(text)
         def walk(x, playlist=source):

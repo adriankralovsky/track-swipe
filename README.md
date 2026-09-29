@@ -12,7 +12,7 @@ TrackSwipe turns a Spotify export into a persistent music library. Listen to a Y
 - Automatic M3U playlist export for Navidrome and compatible music servers
 - Local SQLite storage, backups, restore, and human-readable JSON export
 
-No Spotify account connection or paid API is required. Searches, previews, and downloads need internet access. Your library database stays on your machine.
+File imports need no Spotify account connection or paid API. Optional playlist URL imports use your own Spotify developer app and account. Searches, previews, and downloads need internet access. Your library database stays on your machine.
 
 ## Quick start: Docker
 
@@ -73,7 +73,7 @@ Supported inputs:
 
 A complete CSV export is recommended for large libraries. Link-only exports often lack artist, album, or duration; use **Edit metadata** to fill missing fields. Public Spotify oEmbed and optional MusicBrainz ISRC lookups can fill some gaps. Unavailable metadata is not invented.
 
-CSV filenames become playlist names unless the export supplies a Playlist / Playlist Name column. Spotify account playlist names are preserved. An optional Import Directory lets you choose exports already present on the backend machine.
+CSV filenames become playlist names, with underscores restored to spaces (for example, `Liked_Songs.csv` → `Liked Songs`), unless the export supplies a Playlist / Playlist Name column. Explicit playlist names are preserved exactly, including intentional underscores. Spotify account playlist names are preserved. An optional Import Directory lets you choose exports already present on the backend machine.
 
 Re-importing merges matching Spotify IDs and adds playlist memberships. Existing skips, candidate rejections, and approvals remain intact. Different releases are not blindly merged by similar titles.
 
@@ -129,6 +129,24 @@ Cookie files grant access to your session: keep them private and do not commit o
 
 The packaged downloader includes JavaScript challenge support and uses Node. If extraction breaks after an upstream change, update dependencies or rebuild the Docker image before retrying. See the [yt-dlp authentication FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp).
 
+## Import a Spotify playlist URL
+
+Open **Import → Connect Spotify to import links**. Create an app in the [Spotify developer dashboard](https://developer.spotify.com/dashboard), select Web API, and register this redirect URI for the default local installation:
+
+```text
+http://127.0.0.1:8765/api/spotify/callback
+```
+
+Enter the app's **Client ID** and exact redirect URI in TrackSwipe, then choose **Continue to Spotify**. No client secret is required. Spotify asks for read access to private and collaborative playlists. After connecting, paste an `https://open.spotify.com/playlist/…` link or `spotify:playlist:…` URI and choose **Import playlist**. Full links with share parameters are accepted; shortened share links must first be opened in a browser and copied as full links.
+
+The importer retrieves every page before saving, checks whether the playlist changed during the fetch, preserves the original name, and merges songs by Spotify ID. Re-importing adds memberships and retains approvals, rejections, skips, and downloaded files. It does not remove earlier memberships when a track disappears from Spotify. Local files, unavailable entries and podcast episodes are omitted, with a count shown after import.
+
+**Spotify access limits:** current development-mode apps require the app owner to have Spotify Premium, and playlist contents are available only when the signed-in user owns or collaborates on the playlist. Other accounts may need to be added to the developer app's allowed users. A public link alone does not guarantee API access. Use a CSV export when Spotify denies access. See [Spotify's development-mode rules](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide).
+
+For another port or remote deployment, register the matching callback address and enter it in TrackSwipe. Spotify permits HTTP on explicit loopback addresses such as `127.0.0.1`, but requires HTTPS elsewhere; `localhost` is not an accepted Spotify redirect hostname. Native development users should complete connection/import at the backend address (default port 8765).
+
+Tokens are stored only in `spotify-connection.json` inside the local data directory, with owner-only permissions on Unix. They are excluded from JSON/SQLite library exports. Reconnect after restoring the library on another machine. **Connection settings → Disconnect** removes local tokens; you can also revoke access in your Spotify account. Never publish the data directory.
+
 ## Navidrome / Subsonic playlists
 
 Playlist membership is stored separately from audio: a song in five playlists still has one physical file. Custom audio tags alone do **not** create server playlists.
@@ -142,7 +160,7 @@ Music/
   Playlists/Favorites.m3u
 ```
 
-Entries use relative paths such as `../Artist/Album/01 - Song.opus`. This works when TrackSwipe and your music server mount the same library at different absolute paths. Only existing audio files within the configured library are included; skipped, missing, and unfinished tracks are omitted. Playlist files update after imports, successful downloads, decisions, and library rescans. Unchanged files keep their timestamps to avoid unnecessary server reimports.
+Entries use relative paths such as `../Artist/Album/01 - Song.opus`. This works when TrackSwipe and your music server mount the same library at different absolute paths. Only existing audio files within the configured library are included; skipped, missing, and unfinished tracks are omitted. Playlist files update after imports, successful downloads, decisions, and library rescans. Unchanged files keep their timestamps to avoid unnecessary server reimports. Managed files carry a stable playlist ID, so later display-name changes keep the same file path. Navidrome preserves names of playlists it has already imported; change an existing server playlist name there when needed.
 
 Use **Playlists → Sync to music server** to export all existing memberships immediately. Automatic updates and the playlist subdirectory are configurable in **Settings → Library**. TrackSwipe only replaces files carrying its own management marker; unrelated playlist files are protected. Avoid manually editing generated files because a future sync replaces their content.
 
