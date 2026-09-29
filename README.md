@@ -111,7 +111,9 @@ Scores are ranking heuristics, not statistical probabilities. Most search result
 
 Use downloads where you have permission and where applicable law and source terms allow. TrackSwipe does not bypass DRM or access restrictions.
 
-Approved tracks download automatically unless paused. Pause stops new work; an active download finishes safely. Failed downloads remain in **Queue** with a readable error and retry controls.
+Approved tracks download automatically unless paused. Pause stops new work; an active download finishes safely. Queue shows a red **needs attention** banner and highlighted rows for failed downloads, plus **Retry failed downloads** and individual Retry controls. A red badge on Queue makes failures visible from other pages.
+
+Temporary network failures, rate limits, and temporary HTTP errors receive **up to three automatic retries after the initial attempt**, with waits of **30 seconds, 2 minutes, and 5 minutes**. A rate limit cools down the whole download worker to avoid hammering the provider. Waiting retries display their attempt number and scheduled time. Pause holds retries; restart preserves their remaining budget and schedule. After all three retries fail, the track stays red for manual attention. Authentication, unavailable-video, and local filesystem errors require manual action immediately. A manual retry starts a fresh retry budget.
 
 ### “Please sign in” / authentication errors
 
@@ -243,4 +245,4 @@ npm run build --prefix frontend
 
 Tests cover ranking, cached auto-pick, durable decisions, imports, real audio tag round-trips, duplicate protection, backup/restore, M3U paths, and authentication configuration without reading your browser cookies.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md). The backend separates persistence, imports, matching, automatic approval, playlist export, YouTube options, and audio/tagging. SQLite schema initialization is automatic. API documentation is at `/docs`; `/api/health` reports ffmpeg availability. Provider failures are logged and remain visible in the interface.
+See [ARCHITECTURE.md](ARCHITECTURE.md). The backend separates persistence, imports, matching, automatic approval, playlist export, YouTube options, and audio/tagging. SQLite schema initialization/migration is automatic. Schema v2 adds persistent retry state; v1 and v2 SQLite backups can be restored. API documentation is at `/docs`; `/api/health` reports ffmpeg availability. Provider failures are logged and remain visible in the interface.

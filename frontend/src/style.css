@@ -2414,3 +2414,101 @@ label > input {
     font-size: 21px;
   }
 }
+.queue-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 18px;
+  padding: 18px 20px;
+  border: 1px solid #ef667952;
+  border-radius: 10px;
+  background: linear-gradient(120deg, #762f3b66, #4b222d66);
+  color: #ffb4c0;
+}
+.queue-error-banner > div {
+  flex: 1;
+}
+.queue-error-banner strong {
+  font-size: 14px;
+}
+.queue-error-banner p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #d8a0ac;
+  margin-top: 6px;
+}
+.queue-error-banner .secondary {
+  border-color: #e5899950;
+  background: #963f4a55;
+  color: #ffcfda;
+}
+.queue-retry-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px;
+  padding: 14px;
+  border-radius: 8px;
+  background: #d2a45212;
+  border: 1px solid #d2a45228;
+  color: #d5bd8f;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.track-row-failed {
+  background: #c5486012;
+  border-left: 3px solid #e67587;
+}
+.track-row-failed:hover {
+  background: #c548601e;
+}
+.sidebar nav button b.queue-error-badge {
+  background: #d85c7430;
+  color: #ffadbd;
+}
+.queue-summary .queue-stat-failed strong {
+  color: #f08c9d;
+}
+.status-badge.retrying {
+  background: #c69b4b14;
+  color: #d8bc87;
+}
+.retry-detail {
+  display: block;
+  color: #c5aa7e;
+  font-size: 10px;
+  margin-top: 7px;
+}
+.queue-summary {
+  grid-template-columns: repeat(6, 1fr);
+}
+@media (max-width: 650px) {
+  .queue-error-banner {
+    flex-wrap: wrap;
+    padding: 15px;
+    margin: 12px;
+  }
+  .queue-error-banner > div {
+    min-width: 70%;
+  }
+  .queue-error-banner .secondary {
+    width: 100%;
+  }
+  .queue-retry-banner {
+    margin: 12px;
+  }
+  .queue-summary {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .sidebar nav button {
+    position: relative;
+  }
+  .sidebar nav button b.queue-error-badge {
+    display: block;
+    position: absolute;
+    right: 0;
+    top: 0;
+    font-size: 8px;
+    padding: 1px 4px;
+  }
+}

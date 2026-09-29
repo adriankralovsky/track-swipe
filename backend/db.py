@@ -22,7 +22,7 @@ def connect():
 def init():
     with connect() as c:
         version=c.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0,1): raise RuntimeError(f'Unsupported database version {version}')
+        if version not in (0,1,2): raise RuntimeError(f'Unsupported database version {version}')
         c.executescript('''
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS tracks(id INTEGER PRIMARY KEY, identity TEXT UNIQUE NOT NULL, metadata TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'waiting', approved_video TEXT, output_file TEXT, error TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -32,7 +32,8 @@ def init():
         CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, metadata TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, track_id INTEGER, action TEXT NOT NULL, detail TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        PRAGMA user_version=1;
+        CREATE TABLE IF NOT EXISTS download_retries(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE, retry_count INTEGER NOT NULL DEFAULT 0, next_retry_at REAL NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT '');
+        PRAGMA user_version=2;
         ''')
         c.execute("UPDATE tracks SET status='approved' WHERE status='downloading'")
 
@@ -45,5 +46,7 @@ def event(c, tid, action, detail=''):
 
 def track(r, c):
     d = dict(r); d['metadata'] = json.loads(d['metadata'])
+    retry=c.execute('SELECT retry_count,next_retry_at,kind FROM download_retries WHERE track_id=?',(d['id'],)).fetchone()
+    d.update(dict(retry) if retry else dict(retry_count=0,next_retry_at=0,kind=''))
     d['playlists'] = [x[0] for x in c.execute('SELECT name FROM playlists JOIN track_playlists ON playlists.id=playlist_id WHERE track_id=?', (d['id'],))]
     return d

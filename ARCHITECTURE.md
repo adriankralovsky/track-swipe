@@ -23,3 +23,7 @@ Backups use SQLite's online backup API. Restore validates schema/integrity befor
 `playlists.py` emits managed UTF-8 M3U files under the music root. Relative paths allow different container mounts; atomic updates preserve unchanged mtimes. Existing audio is referenced once per playlist, with no copied audio. Import/rescan/download/decision hooks trigger synchronization; failures go to history rather than marking successful audio as failed.
 
 `youtube.py` supplies a shared yt-dlp configuration to matching, manual inspection, and downloads. Browser extraction or cookie-file access is explicit configuration, off by default. Cookie contents never enter SQLite or exports. UI errors strip ANSI escape sequences and explain the authentication recovery path.
+
+## Download retry migration (version 2)
+
+`download_retries` stores the per-track retry count, next eligible attempt timestamp, and error category. Existing version 1 databases migrate additively; backup restore still accepts version 1. The `retrying` track state stays visible in Queue. `retries.py` claims due jobs transactionally, honors pause, and applies a provider-wide cooldown on rate-limit failures. Temporary errors get three additional attempts (30/120/300 seconds); permanent/authentication errors and exhausted retries stay failed. Manual retry resets the budget; successful downloads clear it. Retry state is included in SQLite and JSON exports.

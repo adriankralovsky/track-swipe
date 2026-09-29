@@ -82,7 +82,8 @@ const labels = {
   downloading: "Downloading",
   completed: "Downloaded",
   existing: "Already in library ✓",
-  failed: "Failed",
+  failed: "Needs attention",
+  retrying: "Retry scheduled",
   skipped: "Skipped",
 };
 
@@ -179,7 +180,8 @@ function App() {
       (counts.waiting || 0) +
       (counts.approved || 0) +
       (counts.downloading || 0) +
-      (counts.failed || 0);
+      (counts.failed || 0) +
+      (counts.retrying || 0);
   return (
     <div
       className="app"
@@ -208,8 +210,18 @@ function App() {
               <Icon size={19} />
               <span>{name}</span>
               {name === "Review" && <b>{counts.waiting || 0}</b>}
-              {name === "Queue" && !!counts.approved && (
-                <b>{counts.approved}</b>
+              {name === "Queue" && !!counts.failed ? (
+                <b
+                  className="queue-error-badge"
+                  title={`${counts.failed} downloads need attention`}
+                >
+                  {counts.failed} !
+                </b>
+              ) : (
+                name === "Queue" &&
+                !!((counts.approved || 0) + (counts.retrying || 0)) && (
+                  <b>{(counts.approved || 0) + (counts.retrying || 0)}</b>
+                )
               )}
             </button>
           ))}
@@ -1321,7 +1333,8 @@ function LibraryPage({ page, revision, perform, search, setSearch, status }) {
     [group, setGroup] = useState("All tracks"),
     [selected, setSelected] = useState(""),
     [edit, setEdit] = useState(null),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [retryBusy, setRetryBusy] = useState(false);
   useEffect(() => {
     setSelected("");
     setGroup("All tracks");
@@ -1341,13 +1354,13 @@ function LibraryPage({ page, revision, perform, search, setSearch, status }) {
     if (page !== "Queue") return;
     const id = setInterval(
       () =>
-        api("/tracks?view=queue")
+        api(`/tracks?view=queue&q=${encodeURIComponent(search)}`)
           .then(setTracks)
           .catch(() => {}),
       2500,
     );
     return () => clearInterval(id);
-  }, [page]);
+  }, [page, search]);
   let visible = tracks;
   if (selected)
     visible = tracks.filter((t) =>
@@ -1363,16 +1376,73 @@ function LibraryPage({ page, revision, perform, search, setSearch, status }) {
       : [...new Set(tracks.map((t) => t.metadata.album || "Singles"))];
   return (
     <section className="collection">
+      {page === "Queue" && !!status.counts.failed && (
+        <div className="queue-error-banner" role="alert">
+          <Info size={23} />
+          <div>
+            <strong>
+              {status.counts.failed}{" "}
+              {status.counts.failed === 1 ? "download needs" : "downloads need"}{" "}
+              attention
+            </strong>
+            <p>
+              These downloads stopped after an error. You can retry them now.
+              Sign-in or file-access errors may need fixing first.
+            </p>
+          </div>
+          <button
+            className="secondary"
+            disabled={retryBusy}
+            onClick={async () => {
+              setRetryBusy(true);
+              try {
+                const result = await perform(() =>
+                  post("/downloads/retry-failed"),
+                );
+                if (result)
+                  await perform(
+                    async () => result,
+                    `${result.queued} failed downloads queued for retry`,
+                  );
+              } finally {
+                setRetryBusy(false);
+              }
+            }}
+          >
+            <RefreshCw size={16} className={retryBusy ? "spin" : ""} />
+            {retryBusy ? "Queuing…" : "Retry failed downloads"}
+          </button>
+        </div>
+      )}
+      {page === "Queue" && !!status.counts.retrying && (
+        <div className="queue-retry-banner" role="status">
+          <RefreshCw size={16} />
+          <span>
+            {status.counts.retrying}{" "}
+            {status.counts.retrying === 1 ? "download is" : "downloads are"}{" "}
+            waiting for an automatic retry.{" "}
+            {status.paused
+              ? "Retries are paused."
+              : "Up to 3 retries, after 30 seconds, 2 minutes, and 5 minutes. Rate limits pause new downloads during cooldown."}
+          </span>
+        </div>
+      )}
       {page === "Queue" && (
         <div className="queue-summary">
           {[
             ["Approved", status.counts.approved || 0],
             ["Downloading", status.counts.downloading || 0],
             ["Completed", status.counts.completed || 0],
-            ["Failed", status.counts.failed || 0],
+            ["Needs attention", status.counts.failed || 0],
+            ["Retry scheduled", status.counts.retrying || 0],
             ["Candidates rejected", status.rejected],
           ].map(([label, value]) => (
-            <div key={label}>
+            <div
+              key={label}
+              className={
+                label === "Needs attention" && value ? "queue-stat-failed" : ""
+              }
+            >
               <strong>{value}</strong>
               <span>{label}</span>
             </div>
@@ -1527,7 +1597,10 @@ function LibraryPage({ page, revision, perform, search, setSearch, status }) {
       ) : (
         <div className="track-list">
           {visible.map((t) => (
-            <div className="track-row" key={t.id}>
+            <div
+              className={`track-row ${t.status === "failed" ? "track-row-failed" : ""}`}
+              key={t.id}
+            >
               <Art src={t.metadata.artwork} small />
               <div className="row-title">
                 <strong>{t.metadata.title || "Metadata needed"}</strong>
@@ -1535,6 +1608,20 @@ function LibraryPage({ page, revision, perform, search, setSearch, status }) {
                   {t.metadata.artists.join(", ") || t.metadata.spotify_id}
                 </span>
                 {t.error && <small className="error-text">{t.error}</small>}
+                {t.status === "retrying" && (
+                  <small className="retry-detail">
+                    Automatic retry {t.retry_count}/3 ·{" "}
+                    {status.paused
+                      ? "Paused"
+                      : `Scheduled for ${new Date(t.next_retry_at * 1000).toLocaleTimeString()}`}
+                  </small>
+                )}
+                {t.status === "failed" && t.retry_count >= 3 && (
+                  <small className="error-text">
+                    All 3 automatic retries were used. Retry manually when
+                    ready.
+                  </small>
+                )}
               </div>
               <span className="row-album">{t.metadata.album || "Single"}</span>
               <span className={`status-badge ${t.status}`}>

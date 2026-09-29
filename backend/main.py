@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from . import db, importer, matcher, media, metadata, autoapprove, youtube
+from . import db, importer, matcher, media, metadata, autoapprove, youtube, retries
 from . import playlists as playlist_export
 
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
@@ -18,20 +18,18 @@ def worker():
         with operation:
             if db.settings()['paused']: continue
             autoapprove.apply()
-            with db.connect() as c:
-                r=c.execute("SELECT * FROM tracks WHERE status='approved' ORDER BY id LIMIT 1").fetchone()
-                if not r: continue
-                c.execute("UPDATE tracks SET status='downloading',error=NULL WHERE id=?",(r['id'],)); db.event(c,r['id'],'downloading')
+            r=retries.claim_next()
+            if not r: continue
             try:
                 path,existing=media.download_track(r)
                 with db.connect() as c:
+                    retries.reset(c,r['id'])
                     status='existing' if existing else 'completed'
                     c.execute('UPDATE tracks SET status=?,output_file=?,error=NULL WHERE id=?',(status,path,r['id'])); db.event(c,r['id'],status,path)
                 playlist_export.sync_safely()
             except Exception as e:
                 log.exception('Download failed for track %s',r['id'])
-                with db.connect() as c:
-                    c.execute("UPDATE tracks SET status='failed',error=? WHERE id=?",(youtube.friendly_error(e),r['id'])); db.event(c,r['id'],'failed',youtube.friendly_error(e))
+                retries.record_failure(r['id'],e)
 
 @asynccontextmanager
 async def lifespan(app):
@@ -89,7 +87,7 @@ def tracks(view:str='all',q:str='',playlist:str=''):
         rows=[r for r in rows if r['status'] in allowed]
     elif view=='downloaded': rows=[r for r in rows if r['status'] in ('completed','existing')]
     elif view=='not_downloaded': rows=[r for r in rows if r['status'] not in ('completed','existing')]
-    elif view=='queue': rows=[r for r in rows if r['status'] in ('approved','downloading','failed')]
+    elif view=='queue': rows=[r for r in rows if r['status'] in ('approved','downloading','retrying','failed')]
     elif view!='all': rows=[r for r in rows if r['status']==view]
     if playlist: rows=[r for r in rows if playlist in r['playlists']]
     if q: rows=[r for r in rows if q.casefold() in json.dumps(r['metadata'],ensure_ascii=False).casefold()]
@@ -211,6 +209,7 @@ def decision(tid:int,body:dict):
             if not r['approved_video']: raise ValueError('No approved match')
             c.execute("UPDATE tracks SET status='approved',error=NULL WHERE id=?",(tid,))
         else: raise ValueError('Unknown decision')
+        if action in ('accept','skip','restore','retry'): retries.reset(c,tid)
         db.event(c,tid,action,vid or '')
     playlist_export.sync_safely()
     return {'ok':True}
@@ -293,12 +292,12 @@ def history():
 @app.get('/api/export/json')
 def export_json():
     from fastapi.responses import Response
-    with db.connect() as c: data={table:[dict(r) for r in c.execute('SELECT * FROM '+table)] for table in ('tracks','playlists','track_playlists','candidates','files','events','settings')}
+    with db.connect() as c: data={table:[dict(r) for r in c.execute('SELECT * FROM '+table)] for table in ('tracks','playlists','track_playlists','candidates','files','events','settings','download_retries')}
     for rows in data.values():
         for row in rows:
             if 'metadata' in row: row['metadata']=json.loads(row['metadata'])
     for row in data['settings']: row['value']=json.loads(row['value'])
-    return Response(json.dumps({'version':1,'tables':data},ensure_ascii=False,indent=2),media_type='application/json',headers={'Content-Disposition':'attachment; filename="trackswipe-state.json"'})
+    return Response(json.dumps({'version':2,'tables':data},ensure_ascii=False,indent=2),media_type='application/json',headers={'Content-Disposition':'attachment; filename="trackswipe-state.json"'})
 
 @app.get('/api/export/database')
 def export_database():
@@ -319,10 +318,12 @@ async def restore(file:UploadFile=File(...)):
                 temp.write(data); temp.flush()
                 with sqlite3.connect(temp.name) as source:
                     if source.execute('PRAGMA integrity_check').fetchone()[0]!='ok': raise ValueError('Invalid SQLite backup')
-                    if source.execute('PRAGMA user_version').fetchone()[0]!=1: raise ValueError('Unsupported backup schema version')
-                    tables=('tracks','playlists','track_playlists','candidates','files','events','settings')
+                    source_version=source.execute('PRAGMA user_version').fetchone()[0]
+                    if source_version not in (1,2): raise ValueError('Unsupported backup schema version')
+                    tables=('tracks','playlists','track_playlists','candidates','files','events','settings','download_retries')
                     with db.connect() as current:
                         for table in tables:
+                            if table=='download_retries' and source_version==1: continue
                             expected=[r[1] for r in current.execute('PRAGMA table_info('+table+')')]
                             found=[r[1] for r in source.execute('PRAGMA table_info('+table+')')]
                             if found!=expected: raise ValueError('Invalid backup schema: '+table)
@@ -333,6 +334,7 @@ async def restore(file:UploadFile=File(...)):
                         current.execute('PRAGMA foreign_keys=OFF')
                         for table in reversed(tables): current.execute('DELETE FROM '+table)
                         for table in tables:
+                            if table=='download_retries' and source_version==1: continue
                             rows=source.execute('SELECT * FROM '+table).fetchall()
                             if rows: current.executemany('INSERT INTO '+table+' VALUES('+','.join('?' for _ in rows[0])+')',rows)
                         current.execute("INSERT OR REPLACE INTO settings VALUES('paused','true')")
@@ -349,6 +351,17 @@ def apply_auto_approval():
 def sync_playlists():
     return playlist_export.sync(force=True)
 
+@app.post('/api/downloads/retry-failed')
+def retry_failed_downloads():
+    with db.connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        rows=c.execute("SELECT id FROM tracks WHERE status='failed' AND approved_video IS NOT NULL").fetchall()
+        for row in rows:
+            retries.reset(c,row['id'])
+            c.execute("UPDATE tracks SET status='approved',error=NULL WHERE id=?",(row['id'],))
+            db.event(c,row['id'],'retry','Manually retry all failed downloads')
+    return {'queued':len(rows)}
+
 @app.post('/api/downloads/retry-auth')
 def retry_auth_downloads():
     count=0
@@ -356,6 +369,7 @@ def retry_auth_downloads():
         for row in c.execute("SELECT * FROM tracks WHERE status='failed' AND approved_video IS NOT NULL").fetchall():
             if youtube.auth_required(row['error'] or ''):
                 c.execute("UPDATE tracks SET status='approved',error=NULL WHERE id=?",(row['id'],))
+                retries.reset(c,row['id'])
                 db.event(c,row['id'],'retry','YouTube authentication retry')
                 count+=1
     return {'queued':count}
