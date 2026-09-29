@@ -8,6 +8,8 @@ DB = DATA / 'trackswipe.sqlite3'
 LOCK = threading.RLock()
 DEFAULTS = dict(library_dir=str(DATA / 'Music'), temp_dir=str(DATA / 'temporary'), import_dir='', output_template='{album_artist}/{album}/{track_number} - {title}.{ext}', audio_format='best', allow_conversion=True, embed_artwork=True, embed_metadata=True, normalize_filenames=False, keep_original=False, replay_gain=False, prefer_topic=True, prefer_music=True, penalize_video=True, max_duration_difference=15, candidate_count=12, auto_approve=False, auto_threshold=98, ignore_live=True, ignore_covers=True, ignore_remixes=True, ignore_speed=True, ignore_instrumental=True, show_existing=False, show_skipped=False, autoplay=False, volume=65, keyboard=True, animation_intensity=1, reduced_motion=False, paused=False)
 
+DEFAULTS.update(youtube_auth='none', youtube_cookies_file='', youtube_browser='firefox', youtube_browser_profile='', playlist_auto_export=True, playlist_directory='Playlists')
+
 @contextmanager
 def connect():
     c = sqlite3.connect(DB, timeout=30)

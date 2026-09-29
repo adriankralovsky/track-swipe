@@ -1,6 +1,7 @@
 import re
 from difflib import SequenceMatcher
 from .importer import norm
+from . import youtube
 
 TERMS={'live':'ignore_live','cover':'ignore_covers','piano':'ignore_covers','instrumental':'ignore_instrumental','karaoke':'ignore_instrumental','remix':'ignore_remixes','remastered':None,'slowed':'ignore_speed','reverb':'ignore_speed','sped up':'ignore_speed','nightcore':'ignore_speed','acoustic':None,'edit':None,'extended':None,'lyrics':None,'lyric video':None,'reaction':None,'tutorial':None,'performance':None}
 
@@ -46,7 +47,17 @@ def score(t,c,s):
     points-=min(65,len(suspicious)*30)
     reasons.extend([{'label':'Topic channel' if topic else 'YouTube Music song' if music else 'General YouTube upload','ok':topic or music},{'label':', '.join(suspicious) if suspicious else 'No unexpected version keywords','ok':not suspicious}])
     if video: reasons.append({'label':'Music video: possible intro/outro','ok':False})
-    c.update(confidence=round(max(0,min(100,points))),reasons=reasons,topic=topic,auto_eligible=bool(topic and music and exact_title and exact_artist and duration is not None and duration<2 and featured_match and not suspicious and not video))
+    blockers=[]
+    if not (topic or music): blockers.append('Topic or YouTube Music source required')
+    if not exact_title: blockers.append('Exact title required')
+    if not exact_artist: blockers.append('Exact primary artist required')
+    if duration is None or duration>=2: blockers.append('Known duration difference must be under 2 seconds')
+    if not featured_match: blockers.append('Featured artists not verified')
+    if suspicious: blockers.append('Unexpected version keywords')
+    if video: blockers.append('Music videos require manual review')
+    if t.get('isrc') and c.get('isrc') and norm(t['isrc'])!=norm(c['isrc']): blockers.append('ISRC mismatch')
+    c['auto_blockers']=blockers
+    c.update(confidence=round(max(0,min(100,points))),reasons=reasons,topic=topic,auto_eligible=not blockers)
     return c
 
 def search(t,s,query=None):
@@ -64,10 +75,10 @@ def search(t,s,query=None):
             vid=r.get('videoId')
             if not vid: continue
             a=[v['name'] for v in r.get('artists',[])]
-            out[vid]=dict(video_id=vid,title=r.get('title',''),artists=a,album=(r.get('album') or {}).get('name',''),channel=' · '.join(a),duration=r.get('duration_seconds') or 0,thumbnail=(r.get('thumbnails') or [{}])[-1].get('url',''),music=True,official=False,auto_generated=r.get('videoType')=='MUSIC_VIDEO_TYPE_ATV')
+            out[vid]=dict(video_id=vid,title=r.get('title',''),artists=a,album=(r.get('album') or {}).get('name',''),channel=' · '.join(a),duration=r.get('duration_seconds') or sum(int(x)*60**i for i,x in enumerate((r.get('duration') or '0').split(':')[::-1])),thumbnail=(r.get('thumbnails') or [{}])[-1].get('url',''),music=True,official=False,auto_generated=r.get('videoType')=='MUSIC_VIDEO_TYPE_ATV')
     except Exception as e: errors.append('YouTube Music: '+str(e))
     try:
-        with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'extract_flat':True,'socket_timeout':15}) as y:
+        with yt_dlp.YoutubeDL(youtube.options(s) | {'no_warnings':True,'extract_flat':True,'socket_timeout':15}) as y:
             result=y.extract_info(f'ytsearch{s["candidate_count"]}:{q} audio',download=False)
             for r in result.get('entries',[]):
                 vid=r.get('id')
@@ -75,6 +86,6 @@ def search(t,s,query=None):
                 c=out.get(vid,{})
                 c.update(video_id=vid,title=c.get('title') or r.get('title',''),channel=r.get('channel') or r.get('uploader') or '',duration=c.get('duration') or r.get('duration') or 0,thumbnail=c.get('thumbnail') or f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg',official=bool(r.get('channel_is_verified')))
                 out[vid]=c
-    except Exception as e: errors.append('YouTube: '+str(e))
+    except Exception as e: errors.append('YouTube: '+youtube.friendly_error(e))
     if not out: raise ValueError('; '.join(errors) or 'No search results. Try a different query.')
     return sorted([score(t,c,s) for c in out.values()],key=lambda c:c['confidence'],reverse=True),errors

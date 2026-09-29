@@ -5,6 +5,7 @@ from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, TSRC, TXX
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.flac import Picture
 from .db import connect, settings, event
+from . import youtube
 from .importer import norm, spotify_id
 
 EXTENSIONS={'.mp3','.m4a','.opus','.ogg','.flac','.aac','.wav','.wma','.aiff','.mp4'}
@@ -154,7 +155,11 @@ class YtDlpDownloader:
         opts={'js_runtimes':{'node':{}},'format':selector,'outtmpl':str(folder/'source.%(ext)s'),'noplaylist':True,'quiet':True,'socket_timeout':30,'retries':3,'keepvideo':s['keep_original'],'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':fmt,'preferredquality':'0'}]}
         if fmt=='best': opts['postprocessors'][0]['preferredcodec']='best'
         if not s['allow_conversion'] and fmt!='best': opts['postprocessors']=[]
-        with yt_dlp.YoutubeDL(opts) as y: y.extract_info('https://www.youtube.com/watch?v='+video_id,download=True)
+        opts.update(youtube.options(s))
+        try:
+            with yt_dlp.YoutubeDL(opts) as y: y.extract_info('https://www.youtube.com/watch?v='+video_id,download=True)
+        except Exception as error:
+            raise ValueError(youtube.friendly_error(error)) from error
         paths=[p for p in folder.iterdir() if p.suffix.lower() in EXTENSIONS]
         if fmt!='best': paths.sort(key=lambda p:p.suffix!='.'+fmt)
         if not paths: raise ValueError('No supported audio output produced')

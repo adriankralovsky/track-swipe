@@ -6,9 +6,9 @@ services:
     environment:
       TRACKSWIPE_DATA: /data
     volumes:
-      - ./data:/data:Z
-      # To use another music folder, add its mount here and select
-      # /music in Settings. Use :z when sharing it with other containers.
-      # - /hdd/Music:/music:Z
+      - ./data:/data
+      # To use an existing music library, mount it and select /music in Settings.
+      # - /path/to/your/Music:/music
+      # SELinux hosts: use :Z for private data, :z for a shared music directory.
     restart: unless-stopped
     stop_grace_period: 30s

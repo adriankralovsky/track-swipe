@@ -6,6 +6,9 @@ from backend import db, importer, matcher, media
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path,monkeypatch):
     monkeypatch.setattr(db,'DB',tmp_path/'test.sqlite3'); monkeypatch.setattr(db,'DATA',tmp_path)
+    monkeypatch.setitem(db.DEFAULTS,'library_dir',str(tmp_path/'music'))
+    monkeypatch.setitem(db.DEFAULTS,'temp_dir',str(tmp_path/'temporary'))
+    (tmp_path/'music').mkdir()
     db.init()
     return tmp_path
 
@@ -134,7 +137,7 @@ def test_invalid_backup_does_not_mutate_state():
 
 def test_atomic_download_collision_preserves_existing(tmp_path,monkeypatch):
     import subprocess
-    library=tmp_path/'music'; library.mkdir()
+    library=tmp_path/'music'; library.mkdir(exist_ok=True)
     s=db.DEFAULTS|{'library_dir':str(library),'temp_dir':str(tmp_path/'temp'),'embed_artwork':False}
     with db.connect() as c:
         for k,v in s.items(): c.execute('INSERT INTO settings VALUES(?,?)',(k,json.dumps(v)))
@@ -150,7 +153,7 @@ def test_atomic_download_collision_preserves_existing(tmp_path,monkeypatch):
 
 def test_rescan_skips_existing_and_recovers_removed_file(tmp_path):
     import subprocess
-    library=tmp_path/'music'; library.mkdir()
+    library=tmp_path/'music'; library.mkdir(exist_ok=True)
     with db.connect() as c: c.execute('INSERT INTO settings VALUES(?,?)',('library_dir',json.dumps(str(library))))
     importer.merge([(target(),'Gym')])
     file=library/'song.mp3'

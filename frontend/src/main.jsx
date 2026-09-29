@@ -555,6 +555,11 @@ function Review({
   useEffect(() => {
     loadTracks();
   }, [revision]);
+  useEffect(() => {
+    if (!settings.auto_approve || status.paused) return;
+    const timer = setInterval(loadTracks, 2000);
+    return () => clearInterval(timer);
+  }, [settings.auto_approve, status.paused]);
   const searchCandidates = async (tid, q) => {
     const token = ++requestVersion.current;
     setLoading(true);
@@ -983,6 +988,15 @@ function Review({
                     </div>
                   ))}
                 </div>
+                {settings.auto_approve && (
+                  <p className="help auto-explanation">
+                    {candidate.auto_blockers?.length
+                      ? `Manual review: ${candidate.auto_blockers.join("; ")}.`
+                      : candidate.confidence < settings.auto_threshold
+                        ? `Below your ${settings.auto_threshold}% auto-pick threshold.`
+                        : "Meets your auto-pick rules. Queuing automatically…"}
+                  </p>
+                )}
                 <div className="candidate-bottom">
                   <span>
                     <ShieldCheck size={13} />
@@ -1396,6 +1410,36 @@ function LibraryPage({ page, revision, perform, search, setSearch, status }) {
           )}
         </div>
         <div className="collection-tools">
+          {page === "Playlists" && (
+            <button
+              className="secondary"
+              onClick={() =>
+                perform(
+                  () => post("/playlists/sync"),
+                  "M3U playlists synced. Run a scan in your music server.",
+                )
+              }
+            >
+              <RefreshCw size={15} />
+              Sync to music server
+            </button>
+          )}
+          {page === "Queue" && (
+            <button
+              className="text-button"
+              onClick={async () => {
+                const r = await perform(() => post("/downloads/retry-auth"));
+                if (r)
+                  await perform(
+                    async () => r,
+                    `${r.queued} sign-in failures requeued`,
+                  );
+              }}
+            >
+              Retry sign-in failures
+            </button>
+          )}
+
           <div className="search-input">
             <Search size={15} />
             <input
@@ -1667,7 +1711,7 @@ const toggleSections = {
     [
       "auto_approve",
       "Automatic confidence mode",
-      "Off by default. Requires strict matching evidence.",
+      "Rechecks saved and new matches. Exact title/artist, duration within 2 seconds, and a Topic or YouTube Music source are required.",
     ],
   ],
   Audio: [
@@ -1746,6 +1790,7 @@ function SettingsPage({ settings, setSettings, perform, notify, refresh }) {
     );
     if (r) setSettings(r);
     setSaving(false);
+    return r;
   };
   const example = () => {
     try {
@@ -1856,6 +1901,53 @@ function SettingsPage({ settings, setSettings, perform, notify, refresh }) {
               disc_number, year, spotify_id, ext. Wrap each in braces. Tracks
               without albums use Singles with the default template.
             </p>
+            <div className="toggle-row">
+              <div>
+                <strong>Sync M3U playlists for Navidrome / Subsonic</strong>
+                <p>
+                  Automatically update portable playlists after imports,
+                  downloads, skips, and rescans. Only existing audio files are
+                  included.
+                </p>
+              </div>
+              <button
+                role="switch"
+                aria-label="Automatic M3U playlist export"
+                aria-checked={draft.playlist_auto_export}
+                className={`toggle ${draft.playlist_auto_export ? "on" : ""}`}
+                onClick={() =>
+                  update("playlist_auto_export", !draft.playlist_auto_export)
+                }
+              >
+                <i />
+              </button>
+            </div>
+            <label className="setting-field">
+              Playlist subdirectory
+              <input
+                value={draft.playlist_directory || "Playlists"}
+                onChange={(e) => update("playlist_directory", e.target.value)}
+              />
+            </label>
+            <p className="help">
+              This directory is inside your music library. Relative audio paths
+              work across Docker mounts. Enable playlist auto-import and scan
+              this folder in Navidrome; Subsonic-compatible clients will see the
+              server's imported playlists.
+            </p>
+            <button
+              className="secondary"
+              onClick={async () => {
+                if (await save())
+                  await perform(
+                    () => post("/playlists/sync"),
+                    "Playlists synced. Run a library scan in your music server.",
+                  );
+              }}
+            >
+              <FolderHeart size={15} />
+              Sync playlists now
+            </button>
             <button
               className="secondary"
               onClick={() =>
@@ -1869,6 +1961,97 @@ function SettingsPage({ settings, setSettings, perform, notify, refresh }) {
         )}
         {tab === "Audio" && (
           <>
+            <h3>YouTube authentication</h3>
+            <p className="help">
+              For videos that ask you to sign in. Credentials remain on this
+              machine and are never included in database exports. Browser mode
+              uses the selected local browser's session; Docker usually needs a
+              cookies file.
+            </p>
+            <label className="setting-field">
+              Authentication source
+              <select
+                value={draft.youtube_auth || "none"}
+                onChange={(e) => update("youtube_auth", e.target.value)}
+              >
+                <option value="none">None (public videos)</option>
+                <option value="file">Netscape cookies file</option>
+                <option value="browser">Signed-in local browser</option>
+              </select>
+            </label>
+            {draft.youtube_auth === "file" && (
+              <label className="setting-field">
+                Cookies file path
+                <input
+                  value={draft.youtube_cookies_file || ""}
+                  placeholder="/data/private/youtube-cookies.txt"
+                  onChange={(e) =>
+                    update("youtube_cookies_file", e.target.value)
+                  }
+                />
+                <span className="help">
+                  Export YouTube cookies in Netscape format. The path must be
+                  accessible to the backend. Do not commit or share this file.
+                </span>
+              </label>
+            )}
+            {draft.youtube_auth === "browser" && (
+              <>
+                <label className="setting-field">
+                  Browser
+                  <select
+                    value={draft.youtube_browser || "firefox"}
+                    onChange={(e) => update("youtube_browser", e.target.value)}
+                  >
+                    {[
+                      "firefox",
+                      "chrome",
+                      "chromium",
+                      "brave",
+                      "edge",
+                      "vivaldi",
+                      "opera",
+                      "safari",
+                    ].map((name) => (
+                      <option key={name}>{name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="setting-field">
+                  Browser profile (optional)
+                  <input
+                    value={draft.youtube_browser_profile || ""}
+                    onChange={(e) =>
+                      update("youtube_browser_profile", e.target.value)
+                    }
+                  />
+                </label>
+                <p className="help">
+                  Run TrackSwipe as the same operating-system user as your
+                  browser. Cookie extraction may need an unlocked keyring. No
+                  cookies are read until a YouTube request runs.
+                </p>
+              </>
+            )}
+            <button
+              className="secondary"
+              onClick={async () => {
+                const saved = await save();
+                if (saved) {
+                  const result = await perform(() =>
+                    post("/downloads/retry-auth"),
+                  );
+                  if (result)
+                    notify(
+                      `${result.queued} authentication failures queued for retry`,
+                    );
+                }
+              }}
+            >
+              <RefreshCw size={15} />
+              Save & retry sign-in failures
+            </button>
+
             <label className="setting-field">
               Preferred audio format
               <select
@@ -1915,6 +2098,30 @@ function SettingsPage({ settings, setSettings, perform, notify, refresh }) {
               </p>
             </div>
             <span className="count-pill">Not installed</span>
+          </div>
+        )}
+        {tab === "Matching" && (
+          <div className="notice">
+            <Info size={17} />
+            <span>
+              Saving matching settings rechecks your saved candidates. The
+              threshold is inclusive; additional safety rules are shown on each
+              card.
+            </span>
+            <button
+              onClick={async () => {
+                const saved = await save();
+                if (saved) {
+                  const r = await perform(() => post("/auto-approve"));
+                  if (r)
+                    notify(
+                      "Saved matches rechecked. Eligible matches are in the queue.",
+                    );
+                }
+              }}
+            >
+              Apply now
+            </button>
           </div>
         )}
         {tab === "Matching" && (

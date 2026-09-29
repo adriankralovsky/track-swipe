@@ -8,3 +8,8 @@ frontend/dist
 data
 __pycache__
 .pytest_cache
+.env
+.env.*
+**/*cookies*.txt
+**/*Cookies*.txt
+**/private

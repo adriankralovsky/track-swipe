@@ -1,89 +1,246 @@
 # TrackSwipe
 
-**Your music. The right version.** A local-first Spotify-export library with a swipe review room, ranked YouTube / YouTube Music matches, persistent decisions, tagged audio downloads, and playlist browsing.
+**Tinder, but for matching songs before downloading them.**
 
-## Run locally on Fedora
+TrackSwipe turns a Spotify export into a persistent music library. Listen to a YouTube candidate, reject the wrong version, and approve the right one. Downloads use your imported song metadata—not whatever happens to be in the video title.
 
-Requires Python 3.11+, Node 22+, and ffmpeg on PATH. Install Python, Node/npm, and ffmpeg using your Fedora package configuration (ffmpeg availability depends on enabled repositories).
+- Swipe review with keyboard shortcuts and visible YouTube previews
+- Ranked Topic / YouTube Music candidates with explanations
+- Optional high-confidence auto-pick, disabled by default
+- Imports that merge tracks and playlist memberships without losing decisions
+- Audio downloads, clean tags, artwork, and duplicate protection
+- Automatic M3U playlist export for Navidrome and compatible music servers
+- Local SQLite storage, backups, restore, and human-readable JSON export
 
-```bash
-./dev.sh
-```
+No Spotify account connection or paid API is required. Searches, previews, and downloads need internet access. Your library database stays on your machine.
 
-Open **http://127.0.0.1:5173**. The API runs at port 8765. The first launch installs Python and JavaScript dependencies. Internet access is needed for dependencies, searches, artwork, and YouTube playback/downloads; the library and decisions remain local.
+## Quick start: Docker
 
-For a single production service:
+Install Docker with Compose support. Docker Desktop is a convenient option on Windows and macOS; Docker Engine with the Compose plugin works on Linux.
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-npm ci --prefix frontend
-npm run build --prefix frontend
-.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8765
-```
-
-Open **http://127.0.0.1:8765**. Do not expose this personal filesystem tool to the public internet. No user accounts or remote authentication are included. Requests reject foreign browser origins.
-
-## Docker Compose
-
-```bash
+```sh
+git clone https://github.com/adriankralovsky/track-swipe.git
+cd track-swipe
 docker compose up --build -d
 ```
 
-Open **http://127.0.0.1:8765**. State and music persist in `./data`. The Fedora SELinux volume uses `:Z`. To use `/hdd/Music`, add the commented `/music` bind mount in `compose.yaml`, recreate the container, then choose `/music` in Settings. An optional Import Directory lists available exports directly in the Import dialog. The browser directory picker browses the backend's filesystem; it cannot grant Docker access to an unmounted host folder.
+Open **http://localhost:8765**.
 
-## Import your Spotify export
+State persists in the project's `data` directory. By default, music is stored in `data/Music`. To stop the app without deleting your library:
 
-1. Set **Settings → Library → Music Library Directory** to your existing library first.
-2. Click **Import library**, then select an export:
-   - Exportify / playlist CSV: track URI, name, artist name(s), album, milliseconds, release date, ISRC, and optional artwork/track/disc/album-artist columns. Semicolon-separated artist lists are preserved.
-   - Spotify account ZIP / JSON: playlist `items[].track`, saved-library `tracks`, and streaming-history records containing track metadata. Podcasts and unrelated account files are ignored.
-   - `.txt` containing Spotify track URLs or URIs.
-3. Files are scanned before tracks enter review. Existing tagged recordings are marked **Already in library ✓**.
-4. Review matches. Left rejects only the candidate; right approves the song; down skips the song; up cycles candidates; space opens or controls the visible YouTube player. Swipe horizontally on touch devices.
-5. Approved tracks automatically download unless the process is paused. Review and queue state survive restarts.
+```sh
+docker compose down
+```
 
-CSV filenames become playlist names unless a Playlist / Playlist Name column exists. Account export playlist names are preserved. Re-imports merge Spotify IDs and union memberships while preserving skips and approvals. Without IDs, only exact normalized release metadata merges; no fuzzy title-only merging. Different Spotify releases remain separate records. ISRC is used for physical recording detection, not to erase release distinctions.
+To update, back up your state in **Settings → Data**, then run:
 
-Spotify URL lists do not contain artist, album, duration, or ISRC. Public Spotify oEmbed enrichment is attempted for up to 25 unresolved tracks per import and lazily for missing artwork in Review; it may supply only a title/artwork. MusicBrainz enrichment uses an available ISRC and verifies title/artist before filling missing duration or exact-album release/artwork fields. Use Edit metadata → Enrich missing fields to retry. Edit missing canonical fields in Review before searching/downloading. Complete Exportify CSV is recommended for large libraries. The app never invents missing metadata or replaces it with a YouTube title.
+```sh
+git pull
+docker compose up --build -d
+```
 
-## Matching and previews
+### Use an existing music directory
 
-The matcher combines YouTube Music song search (`ytmusicapi`, an unofficial public-interface client) and YouTube search (`yt-dlp`). It prefers structured song results and real `Artist - Topic` channels. Title/artist agreement, album, and duration contribute to confidence; unexpected version keywords and music-video duration differences reduce it. Rejected IDs stay rejected across future searches. Manual YouTube URLs explicitly restore the selected candidate for reconsideration.
+Add a bind mount to the `volumes` section of `compose.yaml`:
 
-Scores are ranking heuristics, **not statistical probabilities**. Repeated searches expand the candidate pool to account for rejected IDs, up to 50 results per provider. ISRC is retained from Spotify and local files; these search providers generally do not supply a reliable candidate ISRC, so it is not fabricated or claimed as verified. Featured artists are compared against candidate artist metadata and titles; strict auto-approval requires all featured artists to be accounted for. Auto mode is off by default and only runs when a review search executes, not an unattended whole-library crawl.
+```yaml
+volumes:
+  - ./data:/data
+  - /path/to/your/Music:/music
+```
 
-The visible official [YouTube IFrame Player](https://developers.google.com/youtube/iframe_api_reference) handles previews. YouTube controls, ads, restrictions, and availability remain intact. The app does not proxy/extract audio for preview or pretend to analyze iframe audio. Some videos disallow embeds; use Open in YouTube. Autoplay can be blocked by your browser.
+On Windows, the host path can look like `C:/Users/YourName/Music`. Then recreate the container and select **`/music`** in **Settings → Library → Music Library Directory**.
 
-## Audio and file organization
+The directory browser shows the filesystem of the machine/container running the backend. Docker cannot access a host directory unless you mount it. On Linux systems with SELinux, add an appropriate volume label: `:Z` for private application data, or `:z` for a music folder shared with another container. Do not relabel system directories.
 
-Use downloads only where you have permission and where source terms and applicable law permit. No DRM, authentication, or geographic restriction bypass is implemented. Providers can rate-limit, require authentication, or break upstream; errors remain visible and retryable. Keep yt-dlp current when upstream changes.
+Keep the application bound to localhost. This is a personal filesystem tool without remote-user authentication.
 
-Default native files:
+## First import
 
-- Database: `./data/trackswipe.sqlite3`
-- Music: `./data/Music/Artist/Album/01 - Title.ext`
-- Singles without albums: `./data/Music/Artist/Singles/Title.ext`
-- Staging: `./data/temporary`
-- Optional retained source audio: temporary directory's `originals/`
+1. Set your Music Library Directory first, especially if you already have downloaded music.
+2. Click **Import library** and choose your export.
+3. TrackSwipe scans existing files and excludes matching recordings from review by default.
+4. Open **Review** and listen before deciding.
 
-`TRACKSWIPE_DATA` changes the state root before startup. Settings changes persist in SQLite. Music and staging paths and output templates are configurable. Collaborations use album/primary artist for folders, all artists for tags. Playlist membership is a database relation and supported custom tag, never a Genre tag or duplicated file.
+Supported inputs:
 
-The modular yt-dlp backend selects best audio, uses ffmpeg for extraction/conversion, and Mutagen for tags and JPEG artwork. The image includes Node and yt-dlp’s packaged JavaScript challenge support. Original/best preserves the available audio codec where possible; selecting AAC/Opus/MP3 may transcode. Transcoding cannot improve source fidelity. With conversion disabled, an unavailable requested source format fails instead of silently transcoding. ReplayGain is explicitly unavailable in the UI.
+| Format | What is imported |
+| --- | --- |
+| Exportify / playlist CSV | Spotify IDs, title, artists, album, duration, release date, ISRC, and other supplied fields |
+| Spotify account ZIP / JSON | Recognized playlist, saved-library, and track-history records; unrelated account data is ignored |
+| Spotify track links / URIs in `.txt` | Track IDs, with best-effort public metadata enrichment |
+| Spotify API-shaped playlist JSON | Track objects, album metadata, artist credits, and playlist names |
 
-A single worker checks known file identifiers before downloading, stages work, and creates final paths exclusively. Existing paths are never overwritten. Missing/unreachable artwork is logged as a history warning without discarding successfully tagged audio. Pause stops new searches/downloads; an in-progress download finishes safely. On restart, interrupted work is requeued. Rescan refreshes metadata matches and returns missing existing files to review. Repair tags first writes a `.tags-backup` copy alongside the original.
+A complete CSV export is recommended for large libraries. Link-only exports often lack artist, album, or duration; use **Edit metadata** to fill missing fields. Public Spotify oEmbed and optional MusicBrainz ISRC lookups can fill some gaps. Unavailable metadata is not invented.
 
-## Backup and restore
+CSV filenames become playlist names unless the export supplies a Playlist / Playlist Name column. Spotify account playlist names are preserved. An optional Import Directory lets you choose exports already present on the backend machine.
 
-Settings → Data exports a consistent SQLite backup or human-readable JSON containing tracks, playlist joins, candidates/rejections, decisions, file paths, and settings. JSON is for inspection/interchange; **restore accepts SQLite backups**. Pause first. Restore validates schema/integrity, saves `pre-restore-<timestamp>.sqlite3` in the data directory, restores rows transactionally, and remains paused. Back up your music separately; database exports do not contain audio. After moving a library, update paths and rescan.
+Re-importing merges matching Spotify IDs and adds playlist memberships. Existing skips, candidate rejections, and approvals remain intact. Different releases are not blindly merged by similar titles.
 
-## Verification and architecture
+## Review controls
 
-```bash
-.venv/bin/python -m pytest -q
+| Action | Keyboard | Result |
+| --- | --- | --- |
+| Wrong candidate | Left arrow | Reject this result and keep reviewing the **same song** |
+| Approve match | Right arrow | Lock the candidate and queue the track |
+| Skip song | Down arrow | Permanently skip the song until restored from Skipped |
+| Next candidate | Up arrow | Browse another candidate without rejecting it |
+| Preview | Space | Open or control the YouTube player |
+
+Horizontal swipes work on touch devices. If automatic results run out, edit the search query, search again, paste a manual YouTube URL, or skip the song. Rejected candidate IDs remain rejected across searches.
+
+Previews use the visible [official YouTube iframe player](https://developers.google.com/youtube/iframe_api_reference). Browser autoplay rules and YouTube embed restrictions apply. Use **Open in YouTube** if a video cannot play in the embedded player.
+
+### Automatic confidence mode
+
+Enable **Settings → Matching → Automatic confidence mode** and choose a threshold, such as 98%. Saving matching settings re-evaluates **already saved candidates**, including after changing the threshold. New searches also apply the rules. The download worker rechecks saved candidates after startup/resume.
+
+A candidate must meet the threshold **and** these safety checks:
+
+- Topic channel **or** a structured YouTube Music song result
+- Exact normalized title and primary artist
+- Known duration difference strictly below 2 seconds
+- Featured artists accounted for
+- No unexpected version keywords, music-video classification, or known ISRC conflict
+
+The threshold is inclusive: 98% qualifies at a 98% setting. An eligible YouTube Music result does not need a literal `- Topic` suffix. Each card explains any additional reason it still needs manual review. Skipped tracks, rejected candidates, existing audio, and failed downloads are not silently approved again.
+
+Scores are ranking heuristics, not statistical probabilities. Most search results do not expose a reliable ISRC; the app does not claim to have verified one when it is unavailable. Searches use `ytmusicapi` and `yt-dlp`, so provider changes and rate limits can affect availability. Auto-pick handles cached candidates and searches performed by Review; it is not an unattended search of every unreviewed song.
+
+## Downloads and YouTube sign-in
+
+Use downloads where you have permission and where applicable law and source terms allow. TrackSwipe does not bypass DRM or access restrictions.
+
+Approved tracks download automatically unless paused. Pause stops new work; an active download finishes safely. Failed downloads remain in **Queue** with a readable error and retry controls.
+
+### “Please sign in” / authentication errors
+
+Some videos require an authenticated YouTube session. Configure **Settings → Audio → YouTube authentication**:
+
+**Native application:** choose **Signed-in local browser**, select your browser, and optionally supply its profile. Run TrackSwipe as the same operating-system user as the browser. Cookie extraction may require an unlocked keyring or a closed browser, depending on the platform.
+
+**Docker or another backend machine:** choose **Netscape cookies file**. Export your YouTube session using the [yt-dlp cookie instructions](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies). For example, store the file at `data/private/youtube-cookies.txt` on the host and configure `/data/private/youtube-cookies.txt` in the app. The backend needs a readable, writable cookie file because yt-dlp can update it.
+
+Use **Save & retry sign-in failures** after configuration. Only authentication-related failures are requeued; other failures remain unchanged. Expired cookies may need to be exported again. Cookies do not guarantee access to removed, private, region-restricted, or otherwise unavailable videos.
+
+Cookie files grant access to your session: keep them private and do not commit or share them. TrackSwipe stores only the selected mode, browser/profile, and file path in settings—not cookie contents. Database backups do not include the cookie file. Git and Docker ignore rules exclude conventional cookie filenames and private directories.
+
+The packaged downloader includes JavaScript challenge support and uses Node. If extraction breaks after an upstream change, update dependencies or rebuild the Docker image before retrying. See the [yt-dlp authentication FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp).
+
+## Navidrome / Subsonic playlists
+
+Playlist membership is stored separately from audio: a song in five playlists still has one physical file. Custom audio tags alone do **not** create server playlists.
+
+TrackSwipe writes UTF-8 extended **`.m3u` files** inside your Music Library Directory, under `Playlists` by default:
+
+```text
+Music/
+  Artist/Album/01 - Song.opus
+  Playlists/Gym.m3u
+  Playlists/Favorites.m3u
+```
+
+Entries use relative paths such as `../Artist/Album/01 - Song.opus`. This works when TrackSwipe and your music server mount the same library at different absolute paths. Only existing audio files within the configured library are included; skipped, missing, and unfinished tracks are omitted. Playlist files update after imports, successful downloads, decisions, and library rescans. Unchanged files keep their timestamps to avoid unnecessary server reimports.
+
+Use **Playlists → Sync to music server** to export all existing memberships immediately. Automatic updates and the playlist subdirectory are configurable in **Settings → Library**. TrackSwipe only replaces files carrying its own management marker; unrelated playlist files are protected. Avoid manually editing generated files because a future sync replaces their content.
+
+### Navidrome setup
+
+Point Navidrome at the **same music library**, including its `Playlists` subdirectory. Ensure these settings permit import:
+
+```yaml
+environment:
+  ND_AUTOIMPORTPLAYLISTS: "true"
+  ND_PLAYLISTSPATH: "Playlists/**"
+```
+
+An empty `ND_PLAYLISTSPATH` also allows playlists throughout the library. If you choose another subdirectory in TrackSwipe, update this setting accordingly. Trigger a Navidrome library scan after the first sync. Navidrome needs an existing admin user before it imports playlists. See [Navidrome configuration](https://www.navidrome.org/docs/usage/configuration/options/) and [initial setup](https://www.navidrome.org/docs/getting-started/).
+
+After Navidrome imports the files, its Subsonic/OpenSubsonic clients can browse those server playlists. Other Subsonic-compatible servers can use the same relative-path M3U files where they support playlist import; consult that server's import settings. TrackSwipe does not call a remote Subsonic API or manage server playlist permissions. Depending on the server, imported playlists may initially belong to an administrator or require sharing before other users can see them.
+
+## File organization and audio quality
+
+Default music layout:
+
+```text
+Music/Album Artist/Album/01 - Title.ext
+Music/Artist/Singles/Title.ext
+```
+
+Collaborations use album/primary artist for folders while retaining all artists in tags. Set a custom output template in **Settings → Library**. Unicode names are preserved; unsafe filename characters are replaced.
+
+Original/best audio preserves the source codec where possible. M4A/AAC, Opus, and MP3 are available when conversion is allowed. Transcoding cannot improve source fidelity. With conversion disabled, unavailable requested formats fail instead of silently converting. ReplayGain is currently unavailable and is marked accordingly in Settings.
+
+Mutagen writes supported title, artists, album, album artist, track/disc, date, ISRC, Spotify ID, explicit status, playlist membership, and artwork fields. Artwork failures appear in history without discarding otherwise successful audio. Playlist membership never overwrites Genre.
+
+Downloads are staged and published atomically without overwriting existing files. Duplicate checks prioritize ISRC and Spotify IDs, then metadata, duration, and conservative filename fallback. **Rescan library** picks up manually added/removed music. **Repair tags** updates an existing file after preserving a `.tags-backup` copy.
+
+## Local data and backups
+
+| Data | Default location |
+| --- | --- |
+| Database and settings | `data/trackswipe.sqlite3` |
+| Music | `data/Music/` |
+| Temporary downloads | `data/temporary/` |
+| Optional retained source audio | Temporary directory's `originals/` subdirectory |
+| Generated playlists | Music directory's `Playlists/` subdirectory |
+
+`TRACKSWIPE_DATA` changes the state root before startup. Music and staging directories are configurable independently.
+
+**Settings → Data** provides:
+
+- A consistent SQLite backup containing tracks, playlists, candidates, decisions, settings, and history
+- A human-readable JSON export for inspection and interchange
+- SQLite restore with integrity/schema checks and an automatic pre-restore safety backup
+
+Pause before restoring. The app remains paused afterward. JSON is an export format; restore accepts SQLite backups. Music and cookie files are not embedded in database backups—back up audio separately, and treat session cookies separately from ordinary library data. Update directory settings and rescan after moving a library.
+
+## Native installation and development
+
+Install **Python 3.11+**, **Node.js 22+ with npm**, and **ffmpeg**. They must be available on PATH. Install them using your operating system's package manager or their official installers.
+
+### Linux / macOS
+
+For development:
+
+```sh
+./dev.sh
+```
+
+The script prepares dependencies, starts the API on port 8765, and runs Vite at **http://localhost:5173**.
+
+For a single production service:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+npm ci --prefix frontend
+npm run build --prefix frontend
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+```
+
+### Windows PowerShell
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+npm ci --prefix frontend
+npm run build --prefix frontend
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+```
+
+Open **http://localhost:8765**. Docker is the tested, consistent deployment path across host operating systems; native Windows/macOS behavior can depend on installed codecs, browser cookie access, and filesystem permissions.
+
+### Tests and architecture
+
+With the Python environment activated, run:
+
+```sh
+python -m pytest -q
 npm run build --prefix frontend
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md). Migration version 1 initializes automatically using SQLite `user_version`; unsupported backup versions are rejected. Backend modules separate import, scoring/search, tagging/downloading, persistence, and API orchestration. Logs include provider/download failures; `/api/health` reports ffmpeg availability. Interactive API documentation is at `/docs`.
+Tests cover ranking, cached auto-pick, durable decisions, imports, real audio tag round-trips, duplicate protection, backup/restore, M3U paths, and authentication configuration without reading your browser cookies.
 
-No Spotify credentials or paid API are required. Search terms are sent to YouTube; artwork requests go to the URL supplied by the export; unresolved links may contact Spotify. Fonts fall back to local system fonts if Google Fonts cannot load. All durable library state is stored locally.
+See [ARCHITECTURE.md](ARCHITECTURE.md). The backend separates persistence, imports, matching, automatic approval, playlist export, YouTube options, and audio/tagging. SQLite schema initialization is automatic. API documentation is at `/docs`; `/api/health` reports ffmpeg availability. Provider failures are logged and remain visible in the interface.

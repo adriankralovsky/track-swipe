@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from . import db, importer, matcher, media, metadata
+from . import db, importer, matcher, media, metadata, autoapprove, youtube
+from . import playlists as playlist_export
 
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 log=logging.getLogger('trackswipe')
@@ -16,6 +17,7 @@ def worker():
         if db.settings()['paused']: continue
         with operation:
             if db.settings()['paused']: continue
+            autoapprove.apply()
             with db.connect() as c:
                 r=c.execute("SELECT * FROM tracks WHERE status='approved' ORDER BY id LIMIT 1").fetchone()
                 if not r: continue
@@ -25,16 +27,18 @@ def worker():
                 with db.connect() as c:
                     status='existing' if existing else 'completed'
                     c.execute('UPDATE tracks SET status=?,output_file=?,error=NULL WHERE id=?',(status,path,r['id'])); db.event(c,r['id'],status,path)
+                playlist_export.sync_safely()
             except Exception as e:
                 log.exception('Download failed for track %s',r['id'])
                 with db.connect() as c:
-                    c.execute("UPDATE tracks SET status='failed',error=? WHERE id=?",(str(e),r['id'])); db.event(c,r['id'],'failed',str(e))
+                    c.execute("UPDATE tracks SET status='failed',error=? WHERE id=?",(youtube.friendly_error(e),r['id'])); db.event(c,r['id'],'failed',youtube.friendly_error(e))
 
 @asynccontextmanager
 async def lifespan(app):
     db.init()
     s=db.settings()
     Path(s['library_dir']).expanduser().mkdir(parents=True,exist_ok=True)
+    playlist_export.sync_safely()
     stop.clear(); thread=threading.Thread(target=worker,daemon=True); thread.start()
     yield
     stop.set()
@@ -75,6 +79,8 @@ def status():
 def tracks(view:str='all',q:str='',playlist:str=''):
     with db.connect() as c:
         rows=[db.track(r,c) for r in c.execute('SELECT * FROM tracks ORDER BY id')]
+    for row in rows:
+        if row.get('error'): row['error']=youtube.friendly_error(row['error'])
     if view=='review':
         allowed=['waiting']
         s=db.settings()
@@ -107,6 +113,7 @@ def import_data(data,name):
     with operation:
         added=importer.merge(rows)
         scan=media.scan()
+        playlist_export.sync_safely()
     return dict(imported=added,merged=len(rows)-added,scan=scan,unresolved=sum(not m['title'] or not m['artists'] for m,_ in rows))
 
 @app.get('/api/import-files')
@@ -129,13 +136,17 @@ def import_local(body:dict):
 
 @app.post('/api/rescan')
 def rescan():
-    with operation: return media.scan()
+    with operation:
+        result=media.scan()
+        result['playlists']=playlist_export.sync_safely()
+        return result
 
 @app.get('/api/tracks/{tid}/candidates')
 def candidates(tid:int):
     with db.connect() as c:
-        get_track(tid,c)
-        return [json.loads(r['metadata'])|{'rejected':bool(r['rejected'])} for r in c.execute('SELECT * FROM candidates WHERE track_id=? ORDER BY json_extract(metadata,\'$.confidence\') DESC',(tid,))]
+        target=json.loads(get_track(tid,c)['metadata'])
+        current=db.settings()
+        return [matcher.score(target,json.loads(r['metadata']),current)|{'rejected':bool(r['rejected'])} for r in c.execute('SELECT * FROM candidates WHERE track_id=? ORDER BY json_extract(metadata,\'$.confidence\') DESC',(tid,))]
 
 @app.post('/api/tracks/{tid}/search')
 def search(tid:int,body:dict):
@@ -150,9 +161,7 @@ def search(tid:int,body:dict):
         for r in results:
             c.execute('INSERT INTO candidates(track_id,video_id,metadata) VALUES(?,?,?) ON CONFLICT(track_id,video_id) DO UPDATE SET metadata=excluded.metadata',(tid,r['video_id'],json.dumps(r)))
         db.event(c,tid,'searched','; '.join(warnings))
-        s=db.settings(); top=next((r for r in results if not c.execute('SELECT rejected FROM candidates WHERE track_id=? AND video_id=?',(tid,r['video_id'])).fetchone()[0]),None)
-        if s['auto_approve'] and top and top['auto_eligible'] and top['confidence']>=s['auto_threshold'] and get_track(tid,c)['status']=='waiting':
-            c.execute("UPDATE tracks SET status='approved',approved_video=? WHERE id=?",(top['video_id'],tid)); db.event(c,tid,'auto-approved',top['video_id'])
+    autoapprove.apply(tid)
     return {'candidates':candidates(tid),'warnings':warnings}
 
 @app.post('/api/tracks/{tid}/enrich')
@@ -174,7 +183,7 @@ def manual(tid:int,body:dict):
     if not m: raise ValueError('Enter a valid youtube.com/watch or youtu.be video URL')
     vid=m.group(1)
     with db.connect() as c: t=json.loads(get_track(tid,c)['metadata'])
-    with yt_dlp.YoutubeDL({'quiet':True,'socket_timeout':15}) as y: r=y.extract_info('https://www.youtube.com/watch?v='+vid,download=False)
+    with yt_dlp.YoutubeDL(youtube.options(db.settings())) as y: r=y.extract_info('https://www.youtube.com/watch?v='+vid,download=False)
     item=matcher.score(t,dict(video_id=vid,title=r.get('title',''),channel=r.get('channel',''),duration=r.get('duration',0),thumbnail=r.get('thumbnail',''),artists=[r['artist']] if r.get('artist') else [],music=False),db.settings())
     with db.connect() as c:
         c.execute('INSERT INTO candidates(track_id,video_id,metadata,rejected) VALUES(?,?,?,0) ON CONFLICT(track_id,video_id) DO UPDATE SET rejected=0,metadata=excluded.metadata',(tid,vid,json.dumps(item)))
@@ -203,6 +212,7 @@ def decision(tid:int,body:dict):
             c.execute("UPDATE tracks SET status='approved',error=NULL WHERE id=?",(tid,))
         else: raise ValueError('Unknown decision')
         db.event(c,tid,action,vid or '')
+    playlist_export.sync_safely()
     return {'ok':True}
 
 @app.patch('/api/tracks/{tid}')
@@ -249,6 +259,11 @@ def save_settings(body:dict):
         if not isinstance(merged[k],(int,float)) or not lo<=merged[k]<=hi: raise ValueError(f'{k} must be between {lo} and {hi}')
     if not isinstance(merged['candidate_count'],int): raise ValueError('Candidate count must be a whole number')
     if merged['audio_format'] not in ('best','m4a','opus','mp3'): raise ValueError('Unsupported audio format')
+    if merged['youtube_auth'] not in ('none','file','browser'): raise ValueError('Invalid YouTube authentication mode')
+    if merged['youtube_browser'] not in youtube.BROWSERS: raise ValueError('Unsupported browser')
+    if merged['youtube_auth']=='file':
+        youtube.options(merged)
+    playlist_export.directory(merged)
     if merged['replay_gain']: raise ValueError('ReplayGain analysis is not installed')
     for k in ('library_dir','temp_dir'):
         p=Path(merged[k]).expanduser()
@@ -259,6 +274,8 @@ def save_settings(body:dict):
     except (KeyError,ValueError) as e: raise ValueError('Invalid output template: '+str(e))
     with db.connect() as c:
         for k,v in body.items(): c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(k,json.dumps(v)))
+    autoapprove.apply()
+    playlist_export.sync_safely()
     return merged
 
 @app.get('/api/directories')
@@ -323,6 +340,25 @@ async def restore(file:UploadFile=File(...)):
             return {'ok':True,'safety_backup':str(backup)}
     try: return await asyncio.to_thread(run)
     except sqlite3.DatabaseError as e: raise ValueError('Invalid database backup: '+str(e))
+
+@app.post('/api/auto-approve')
+def apply_auto_approval():
+    return {'approved':autoapprove.apply()}
+
+@app.post('/api/playlists/sync')
+def sync_playlists():
+    return playlist_export.sync(force=True)
+
+@app.post('/api/downloads/retry-auth')
+def retry_auth_downloads():
+    count=0
+    with db.connect() as c:
+        for row in c.execute("SELECT * FROM tracks WHERE status='failed' AND approved_video IS NOT NULL").fetchall():
+            if youtube.auth_required(row['error'] or ''):
+                c.execute("UPDATE tracks SET status='approved',error=NULL WHERE id=?",(row['id'],))
+                db.event(c,row['id'],'retry','YouTube authentication retry')
+                count+=1
+    return {'queued':count}
 
 @app.get('/api/health')
 def health():

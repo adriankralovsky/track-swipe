@@ -22,3 +22,7 @@ data/
 *.flac
 *.ogg
 *.wav
+# Authentication files must never be published
+*cookies*.txt
+*Cookies*.txt
+private/

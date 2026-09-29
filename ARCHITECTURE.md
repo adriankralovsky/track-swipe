@@ -15,3 +15,11 @@ Imports merge Spotify IDs first, then exact release metadata (not fuzzy titles).
 Search adapters use YouTube Music song metadata and yt-dlp YouTube fallback. Ranking is deterministic and explainable; suspicious versions and duration mismatches reduce confidence. Auto-approval requires strict metadata evidence, not just a high numeric score. Preview uses the visible official YouTube iframe player, never extracted preview streams.
 
 Backups use SQLite's online backup API. Restore validates schema/integrity before replacing data, with a pre-restore snapshot. JSON exports include all durable tables. Download implementation, tagging, import parsing, matching, and persistence remain separate modules.
+
+## Auto-pick, playlists, and authentication
+
+`autoapprove.py` transactionally re-scores non-rejected saved candidates for waiting tracks using the current settings. It runs after searches/settings changes and before the worker takes another download. The UI polls while auto-pick is enabled. Eligibility treats Topic channels and structured Music results as alternative source evidence; blocking reasons are exposed separately from numeric confidence.
+
+`playlists.py` emits managed UTF-8 M3U files under the music root. Relative paths allow different container mounts; atomic updates preserve unchanged mtimes. Existing audio is referenced once per playlist, with no copied audio. Import/rescan/download/decision hooks trigger synchronization; failures go to history rather than marking successful audio as failed.
+
+`youtube.py` supplies a shared yt-dlp configuration to matching, manual inspection, and downloads. Browser extraction or cookie-file access is explicit configuration, off by default. Cookie contents never enter SQLite or exports. UI errors strip ANSI escape sequences and explain the authentication recovery path.
